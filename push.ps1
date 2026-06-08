@@ -641,14 +641,14 @@ function Do-Push($branch, $commitMsg, $ignoreUntracked) {
     if ($err) { return "切换分支失败:`n$err" }
 
     if ($ignoreUntracked -and $script:ignoredFiles.Count -gt 0) {
-        git add -A
+        git add -u
         foreach ($f in $script:ignoredFiles) {
             git reset HEAD -- $f 2>$null | Out-Null
         }
         $output += "[忽略文件] 以下文件未添加到提交：`n"
         foreach ($f in $script:ignoredFiles) { $output += "  - $f`n" }
     } else {
-        git add -A
+        git add -u
     }
 
     # 使用 UTF-8 编码写入提交信息文件，避免中文乱码

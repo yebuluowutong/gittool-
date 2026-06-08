@@ -116,7 +116,7 @@ function Get-AllRepoFiles {
     }
 
     $allItems = Get-ChildItem -Path $repoPath -Recurse -Force |
-        Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' -and $_.Name -ne '.git-pushexclude' } |
+        Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' } |
         Sort-Object @{Expression={$_.PSIsContainer}; Descending=$false}, @{Expression={$_.FullName}; Ascending=$true}
 
     # 先收集所有目录路径
@@ -148,12 +148,12 @@ function Get-AllRepoFiles {
 
 $ignoredFiles = @()
 
-# 持久化排除文件（.git-pushexclude），避免每次重新选择
-$script:excludeFilePath = Join-Path $repoPath ".git-pushexclude"
+# 从 .gitignore 中加载已有排除列表
+$gitignorePath = Join-Path $repoPath ".gitignore"
 $script:persistedExcludes = @()
-if (Test-Path $script:excludeFilePath) {
-    $script:persistedExcludes = Get-Content $script:excludeFilePath |
-        Where-Object { $_ -and -not $_.StartsWith("#") } |
+if (Test-Path $gitignorePath) {
+    $script:persistedExcludes = Get-Content $gitignorePath |
+        Where-Object { $_ -and -not $_.StartsWith("#") -and -not $_.StartsWith("===") } |
         ForEach-Object { $_.Trim().Replace('\', '/') }
 }
 if ($script:persistedExcludes.Count -gt 0) {
@@ -334,9 +334,29 @@ function Show-UntrackedFileDialog {
             }
         }
         Get-CheckedPaths $treeView.Nodes[0]
-        # 保存排除列表到持久化文件
+        # 将排除列表写入 .gitignore
         $script:persistedExcludes = $script:ignoredFiles
-        [System.IO.File]::WriteAllText($script:excludeFilePath, ($script:ignoredFiles -join "`n"), [System.Text.Encoding]::UTF8)
+        $gitignorePath = Join-Path $repoPath ".gitignore"
+        $markerStart = "# === Git Push Tool 排除列表 ==="
+        $markerEnd   = "# === Git Push Tool 结束 ==="
+        $newSection = @($markerStart) + $script:ignoredFiles + @($markerEnd)
+        if (Test-Path $gitignorePath) {
+            $lines = Get-Content $gitignorePath
+            $startIdx = [array]::IndexOf($lines, $markerStart)
+            $endIdx   = [array]::IndexOf($lines, $markerEnd)
+            if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
+                # 替换已有工具区域
+                $before = $lines[0..($startIdx-1)]
+                $after  = $lines[($endIdx+1)..($lines.Length-1)]
+                $newLines = $before + $newSection + $after
+            } else {
+                # 追加到文件末尾
+                $newLines = $lines + @("") + $newSection
+            }
+        } else {
+            $newLines = $newSection
+        }
+        [System.IO.File]::WriteAllText($gitignorePath, ($newLines -join "`n") + "`n", [System.Text.Encoding]::UTF8)
         $dlgForm.DialogResult = "OK"
         $dlgForm.Close()
     })

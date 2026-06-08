@@ -1,10 +1,8 @@
 ﻿# 强制 Git 输出 UTF-8 编码（解决中文乱码）
 $env:GIT_TERMINAL_PROMPT = "0"
-try {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-} catch {
-    # 无控制台时忽略
-}
+
+# 设置控制台代码页为 UTF-8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -104,6 +102,10 @@ if (-not $remoteUrl) {
     }
     exit
 }
+
+# 配置 git i18n 设置，确保中文输出正确
+git config i18n.commitencoding utf-8 2>$null
+git config i18n.logoutputencoding utf-8 2>$null
 
 # 获取所有文件并构建目录树
 function Get-AllRepoFiles {
@@ -649,7 +651,11 @@ function Do-Push($branch, $commitMsg, $ignoreUntracked) {
         git add -A
     }
 
-    $commitResult = (git commit -m $commitMsg 2>&1) | Out-String
+    # 使用 UTF-8 编码写入提交信息文件，避免中文乱码
+    $commitMsgFile = Join-Path $env:TEMP "git-commit-msg-$([Guid]::NewGuid().ToString()).txt"
+    [System.IO.File]::WriteAllText($commitMsgFile, $commitMsg, [System.Text.Encoding]::UTF8)
+    $commitResult = (git commit -F $commitMsgFile 2>&1) | Out-String
+    Remove-Item $commitMsgFile -Force -ErrorAction SilentlyContinue
     $output += $commitResult
 
     $retry = 0; $maxRetry = 3

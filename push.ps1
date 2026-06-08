@@ -679,50 +679,7 @@ $cbIgnoreUntracked.Add_CheckedChanged({
     }
 })
 
-
-
-$btnRun.Add_Click({
-    $isPush = $rbPush.Checked
-    $targetBranch = ""
-
-    if ($rbBranchCur.Checked) { $targetBranch = $currentBranch }
-    elseif ($rbBranchMain.Checked) { $targetBranch = "main" }
-    elseif ($rbBranchMaster.Checked) { $targetBranch = "master" }
-    elseif ($rbBranchOther.Checked) {
-        $targetBranch = $txtBranch.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-            [System.Windows.Forms.MessageBox]::Show("请输入分支名", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-    }
-
-    if ($isPush) {
-        $commitMsg = $txtCommit.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($commitMsg)) {
-            [System.Windows.Forms.MessageBox]::Show("请输入提交信息", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-    }
-
-    $btnRun.Enabled = $false
-    $btnRun.BackColor = [System.Drawing.Color]::FromArgb(160, 160, 160)
-    $btnRun.Cursor = "WaitCursor"
-    $txtOutput.Text = "执行中，请稍候...`n"
-    # 立即刷新界面文字，否则按钮禁用和提示文字被后续阻塞操作卡住无法显示
-    [System.Windows.Forms.Application]::DoEvents()
-
-    # === 异步执行 git 操作（runspace），避免阻塞 UI ===
-    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-    $runspace.Open()
-    $psJob = [System.Management.Automation.PowerShell]::Create()
-    $psJob.Runspace = $runspace
-
-    # 使用单引号 here-string，内部 $ 为字面量，由 runspace 解析
-    $runspaceScript = @'
-param($Branch, $CommitMsg, $IsPush, $IgnoreUntracked, $IgnoredFiles, $RepoPath)
-
-Set-Location $RepoPath
-
+# ===== Git 操作函数 =====
 function Switch-Branch($target) {
     $current = (git rev-parse --abbrev-ref HEAD).Trim()
     if ($target -ne $current) {
@@ -732,18 +689,18 @@ function Switch-Branch($target) {
     return $null
 }
 
-function Do-Push($branch, $commitMsg, $ignoreUntracked, $ignoredFiles) {
+function Do-Push($branch, $commitMsg, $ignoreUntracked) {
     $output = ""
     $err = Switch-Branch $branch
     if ($err) { return "切换分支失败:`n$err" }
 
-    if ($ignoreUntracked -and $ignoredFiles.Count -gt 0) {
+    if ($ignoreUntracked -and $script:ignoredFiles.Count -gt 0) {
         git add -A
-        foreach ($f in $ignoredFiles) {
+        foreach ($f in $script:ignoredFiles) {
             git reset HEAD -- $f 2>$null | Out-Null
         }
         $output += "[排除文件] 以下文件未添加到提交：`n"
-        foreach ($f in $ignoredFiles) { $output += "  - $f`n" }
+        foreach ($f in $script:ignoredFiles) { $output += "  - $f`n" }
     } else {
         git add -A
     }
@@ -785,88 +742,53 @@ function Do-Pull($branch) {
     return $output
 }
 
-if ($IsPush) {
-    return Do-Push $Branch $CommitMsg $IgnoreUntracked $IgnoredFiles
-} else {
-    return Do-Pull $Branch
-}
-'@
-    [void]$psJob.AddScript($runspaceScript)
-    [void]$psJob.AddParameter("Branch", $targetBranch)
-    [void]$psJob.AddParameter("CommitMsg", $commitMsg)
-    [void]$psJob.AddParameter("IsPush", $isPush)
-    [void]$psJob.AddParameter("IgnoreUntracked", $cbIgnoreUntracked.Checked)
-    [void]$psJob.AddParameter("IgnoredFiles", $script:ignoredFiles)
-    [void]$psJob.AddParameter("RepoPath", (Get-Location).Path)
+$btnRun.Add_Click({
+    $isPush = $rbPush.Checked
+    $targetBranch = ""
 
-    $asyncResult = $psJob.BeginInvoke()
-
-    # 定时器轮询检查异步执行是否完成
-    $pollTimer = New-Object System.Windows.Forms.Timer
-    $pollTimer.Interval = 300
-
-    # 将异步对象提升到脚本级变量，确保闭包引用不会被 GC 回收
-    $script:_asyncJob = $psJob
-    $script:_asyncRunspace = $runspace
-    $script:_asyncResult = $asyncResult
-    $script:_asyncTimer = $pollTimer
-    $script:_asyncStart = [DateTime]::Now
-
-    $pollTimer.Add_Tick({
-        $r = $script:_asyncResult
-        $t = $script:_asyncTimer
-        if (-not $r) { return }
-
-        if ($r.IsCompleted) {
-            $t.Stop()
-            $t.Dispose()
-            try {
-                $result = $script:_asyncJob.EndInvoke($r)
-            } catch {
-                $result = "[错误] 执行异常: $_"
-            } finally {
-                $script:_asyncJob.Dispose()
-                $script:_asyncRunspace.Dispose()
-                $script:_asyncJob = $null
-                $script:_asyncRunspace = $null
-                $script:_asyncResult = $null
-                $script:_asyncTimer = $null
-            }
-
-            $txtOutput.Text = $result
-            $btnRun.Enabled = $true
-            $btnRun.BackColor = $primaryColor
-            $btnRun.Cursor = "Hand"
-
-            if ($result -match "\[错误\]") {
-                [System.Windows.Forms.MessageBox]::Show("操作失败，请查看日志详情", "失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-            } else {
-                [System.Windows.Forms.MessageBox]::Show("操作成功！", "成功", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            }
-        } elseif (([DateTime]::Now - $script:_asyncStart).TotalSeconds -gt 120) {
-            # 超时兜底：120 秒未完成则强制结束
-            $t.Stop()
-            $t.Dispose()
-            try {
-                if (-not $script:_asyncResult.IsCompleted) {
-                    $script:_asyncJob.Stop()
-                }
-                $script:_asyncJob.Dispose()
-                $script:_asyncRunspace.Dispose()
-            } catch { }
-            $script:_asyncJob = $null
-            $script:_asyncRunspace = $null
-            $script:_asyncResult = $null
-            $script:_asyncTimer = $null
-
-            $txtOutput.Text = "[错误] 操作超时（120 秒），请检查网络连接或 Git 仓库状态"
-            $btnRun.Enabled = $true
-            $btnRun.BackColor = $primaryColor
-            $btnRun.Cursor = "Hand"
-            [System.Windows.Forms.MessageBox]::Show("操作超时，请检查网络连接或 Git 仓库状态", "超时", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    if ($rbBranchCur.Checked) { $targetBranch = $currentBranch }
+    elseif ($rbBranchMain.Checked) { $targetBranch = "main" }
+    elseif ($rbBranchMaster.Checked) { $targetBranch = "master" }
+    elseif ($rbBranchOther.Checked) {
+        $targetBranch = $txtBranch.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+            [System.Windows.Forms.MessageBox]::Show("请输入分支名", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
         }
-    })
-    $pollTimer.Start()
+    }
+
+    if ($isPush) {
+        $commitMsg = $txtCommit.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($commitMsg)) {
+            [System.Windows.Forms.MessageBox]::Show("请输入提交信息", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+    }
+
+    $btnRun.Enabled = $false
+    $btnRun.BackColor = [System.Drawing.Color]::FromArgb(160, 160, 160)
+    $btnRun.Cursor = "WaitCursor"
+    $txtOutput.Text = "执行中，请稍候...`n"
+    # 立即刷新界面文字，否则按钮禁用和提示文字被后续阻塞操作卡住无法显示
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # 同步执行 git 操作（替代手动输入 git 命令，直接调用主脚本函数）
+    if ($isPush) {
+        $result = Do-Push $targetBranch $commitMsg $cbIgnoreUntracked.Checked
+    } else {
+        $result = Do-Pull $targetBranch
+    }
+
+    $txtOutput.Text = $result
+    $btnRun.Enabled = $true
+    $btnRun.BackColor = $primaryColor
+    $btnRun.Cursor = "Hand"
+
+    if ($result -match "\[错误\]") {
+        [System.Windows.Forms.MessageBox]::Show("操作失败，请查看日志详情", "失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    } else {
+        [System.Windows.Forms.MessageBox]::Show("操作成功！", "成功", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    }
 })
 
 $btnCancel.Add_Click({ $form.Dispose(); [System.Environment]::Exit(0) })

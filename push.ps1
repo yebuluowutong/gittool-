@@ -239,7 +239,7 @@ $form.Controls.Add($card2)
 
 # ===== 卡片容器 - 提交信息 =====
 $card3 = New-Object System.Windows.Forms.Panel
-$card3.Location = P 24 415
+$card3.Location = P 24 335
 $card3.Size = S 592 140
 $card3.BackColor = $cardBg
 

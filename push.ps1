@@ -116,7 +116,7 @@ function Get-AllRepoFiles {
     }
 
     $allItems = Get-ChildItem -Path $repoPath -Recurse -Force |
-        Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' } |
+        Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' -and $_.Name -ne '.git-pushexclude' } |
         Sort-Object @{Expression={$_.PSIsContainer}; Descending=$false}, @{Expression={$_.FullName}; Ascending=$true}
 
     # 先收集所有目录路径
@@ -147,6 +147,19 @@ function Get-AllRepoFiles {
 }
 
 $ignoredFiles = @()
+
+# 持久化排除文件（.git-pushexclude），避免每次重新选择
+$script:excludeFilePath = Join-Path $repoPath ".git-pushexclude"
+$script:persistedExcludes = @()
+if (Test-Path $script:excludeFilePath) {
+    $script:persistedExcludes = Get-Content $script:excludeFilePath |
+        Where-Object { $_ -and -not $_.StartsWith("#") } |
+        ForEach-Object { $_.Trim().Replace('\', '/') }
+}
+if ($script:persistedExcludes.Count -gt 0) {
+    $lblIgnoreCount.Text = "已排除 $($script:persistedExcludes.Count) 个文件/目录"
+    $script:ignoredFiles = $script:persistedExcludes
+}
 
 function Show-UntrackedFileDialog {
     $data = Get-AllRepoFiles
@@ -247,7 +260,7 @@ function Show-UntrackedFileDialog {
                 $node.ImageIndex = 1
                 $node.SelectedImageIndex = 1
             }
-            if (IsIgnored $item.Path) {
+            if (IsIgnored $item.Path -or $script:persistedExcludes -contains $item.Path) {
                 $node.Checked = $true
             }
             $parentNode.Nodes.Add($node) | Out-Null
@@ -321,6 +334,9 @@ function Show-UntrackedFileDialog {
             }
         }
         Get-CheckedPaths $treeView.Nodes[0]
+        # 保存排除列表到持久化文件
+        $script:persistedExcludes = $script:ignoredFiles
+        [System.IO.File]::WriteAllText($script:excludeFilePath, ($script:ignoredFiles -join "`n"), [System.Text.Encoding]::UTF8)
         $dlgForm.DialogResult = "OK"
         $dlgForm.Close()
     })

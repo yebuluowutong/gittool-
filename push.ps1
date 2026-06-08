@@ -35,7 +35,7 @@ $inputBg = [System.Drawing.Color]::FromArgb(248, 249, 250)
 # 主窗口
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Git Push / Pull"
-$form.Size = S 640 810
+$form.Size = S 640 730
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -106,272 +106,6 @@ if (-not $remoteUrl) {
 # 配置 git i18n 设置，确保中文输出正确
 git config i18n.commitencoding utf-8 2>$null
 git config i18n.logoutputencoding utf-8 2>$null
-
-# 获取所有文件并构建目录树
-function Get-AllRepoFiles {
-    $ignoredPatterns = @()
-    $gitignorePath = Join-Path $repoPath ".gitignore"
-    if (Test-Path $gitignorePath) {
-        $ignoredPatterns = Get-Content $gitignorePath | Where-Object { $_ -and -not $_.StartsWith("#") } | ForEach-Object { $_.Trim() }
-    }
-
-    # 跳过非项目目录，避免递归扫描大量无关文件导致 UI 卡死
-    $skipDirs = @('.atomcode', 'node_modules', '.git', '.svn', 'bin', 'obj', 'packages')
-    $skipPattern = ($skipDirs | ForEach-Object { [regex]::Escape($_) }) -join '|'
-
-    $allItems = Get-ChildItem -Path $repoPath -Recurse -Force |
-        Where-Object { $_.FullName -notmatch "[\\/]($skipPattern)([\\/]|$)" } |
-        Sort-Object @{Expression={$_.PSIsContainer}; Descending=$false}, @{Expression={$_.FullName}; Ascending=$true}
-
-    # 先收集所有目录路径
-    $dirSet = @{}
-    foreach ($item in $allItems) {
-        if ($item.PSIsContainer) {
-            $relPath = $item.FullName.Substring($repoPath.Length + 1).Replace('\', '/')
-            $dirSet[$relPath] = $true
-        }
-    }
-
-    $tree = @{}
-    foreach ($item in $allItems) {
-        $relPath = $item.FullName.Substring($repoPath.Length + 1).Replace('\', '/')
-        $parts = $relPath -split '/'
-        $current = $tree
-        $path = ""
-        for ($i = 0; $i -lt $parts.Count; $i++) {
-            $path = if ($i -eq 0) { $parts[$i] } else { "$path/$($parts[$i])" }
-            $isDir = $dirSet.ContainsKey($path) -or ($i -lt $parts.Count - 1)
-            if (-not $current.ContainsKey($parts[$i])) {
-                $current[$parts[$i]] = @{ Path = $path; IsDir = $isDir; Children = @{} }
-            }
-            $current = $current[$parts[$i]].Children
-        }
-    }
-    return @{ Tree = $tree; IgnoredPatterns = $ignoredPatterns }
-}
-
-$ignoredFiles = @()
-
-# 从 .gitignore 中加载已有排除列表
-$gitignorePath = Join-Path $repoPath ".gitignore"
-$script:persistedExcludes = @()
-if (Test-Path $gitignorePath) {
-    $script:persistedExcludes = Get-Content $gitignorePath |
-        Where-Object { $_ -and -not $_.StartsWith("#") -and -not $_.StartsWith("===") } |
-        ForEach-Object { $_.Trim().Replace('\', '/') }
-}
-if ($script:persistedExcludes.Count -gt 0) {
-    $lblIgnoreCount.Text = "已排除 $($script:persistedExcludes.Count) 个文件/目录"
-    $script:ignoredFiles = $script:persistedExcludes
-}
-
-# 写入排除列表到 .gitignore（标记区域）
-function Write-ExcludesToGitignore($excludes) {
-    $gitignorePath = Join-Path $repoPath ".gitignore"
-    $markerStart = "# === Git Push Tool 排除列表 ==="
-    $markerEnd   = "# === Git Push Tool 结束 ==="
-    $newSection = @($markerStart) + $excludes + @($markerEnd)
-    if (Test-Path $gitignorePath) {
-        $lines = Get-Content $gitignorePath
-        $startIdx = [array]::IndexOf($lines, $markerStart)
-        $endIdx   = [array]::IndexOf($lines, $markerEnd)
-        if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
-            $before = $lines[0..($startIdx-1)]
-            $after  = $lines[($endIdx+1)..($lines.Length-1)]
-            $newLines = $before + $newSection + $after
-        } else {
-            $newLines = $lines + @("") + $newSection
-        }
-    } else {
-        $newLines = $newSection
-    }
-    [System.IO.File]::WriteAllText($gitignorePath, ($newLines -join "`n") + "`n", [System.Text.Encoding]::UTF8)
-}
-
-function Show-UntrackedFileDialog {
-    $data = Get-AllRepoFiles
-    $tree = $data.Tree
-    $ignoredPatterns = $data.IgnoredPatterns
-
-    if ($tree.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("当前仓库没有文件。", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return @()
-    }
-
-    $dlgForm = New-Object System.Windows.Forms.Form
-    $dlgForm.Text = "选择要排除的文件"
-    $dlgForm.Size = S 500 550
-    $dlgForm.StartPosition = "CenterScreen"
-    $dlgForm.FormBorderStyle = "FixedDialog"
-    $dlgForm.MaximizeBox = $false
-    $dlgForm.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10))
-    $dlgForm.BackColor = $cardBg
-
-    $lblDlg = New-Object System.Windows.Forms.Label
-    $lblDlg.Text = "勾选需要排除的文件（不会提交推送）"
-    $lblDlg.Font = New-Object System.Drawing.Font("Segoe UI", $(F 11), [System.Drawing.FontStyle]::Bold)
-    $lblDlg.ForeColor = $textPrimary
-    $lblDlg.Location = P 15 15
-    $lblDlg.Size = S 450 25
-    $dlgForm.Controls.Add($lblDlg)
-
-    $imgList = New-Object System.Windows.Forms.ImageList
-    $imgList.ImageSize = S 16 16
-    $imgList.ColorDepth = "Depth32Bit"
-
-    $bmpFolder = New-Object System.Drawing.Bitmap(16, 16)
-    $g = [System.Drawing.Graphics]::FromImage($bmpFolder)
-    $g.SmoothingMode = "AntiAlias"
-    $folderBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(251, 192, 45))
-    $g.FillRectangle($folderBrush, 2, 4, 12, 10)
-    $g.FillRectangle($folderBrush, 2, 2, 6, 4)
-    $folderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(200, 150, 30), 1)
-    $g.DrawRectangle($folderPen, 2, 4, 12, 10)
-    $g.DrawRectangle($folderPen, 2, 2, 6, 4)
-    $g.Dispose()
-    $imgList.Images.Add($bmpFolder)
-
-    $bmpFile = New-Object System.Drawing.Bitmap(16, 16)
-    $g = [System.Drawing.Graphics]::FromImage($bmpFile)
-    $g.SmoothingMode = "AntiAlias"
-    $fileBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(100, 149, 237))
-    $filePoints = @(
-        (New-Object System.Drawing.Point(3, 1)),
-        (New-Object System.Drawing.Point(13, 1)),
-        (New-Object System.Drawing.Point(13, 15)),
-        (New-Object System.Drawing.Point(3, 15))
-    )
-    $g.FillPolygon($fileBrush, $filePoints)
-    $filePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(65, 105, 225), 1)
-    $g.DrawPolygon($filePen, $filePoints)
-    $g.Dispose()
-    $imgList.Images.Add($bmpFile)
-
-    $treeView = New-Object System.Windows.Forms.TreeView
-    $treeView.Location = P 15 50
-    $treeView.Size = S 450 400
-    $treeView.Font = New-Object System.Drawing.Font("Consolas", $(F 9))
-    $treeView.CheckBoxes = $true
-    $treeView.FullRowSelect = $true
-    $treeView.BorderStyle = "FixedSingle"
-    $treeView.ImageList = $imgList
-    $dlgForm.Controls.Add($treeView)
-
-    function IsIgnored($path) {
-        foreach ($pattern in $ignoredPatterns) {
-            $cleanPattern = $pattern.TrimEnd('/')
-            if ($path -like $cleanPattern -or $path -like "$cleanPattern/*" -or $path.EndsWith("/$cleanPattern")) {
-                return $true
-            }
-            if ($pattern.Contains('*')) {
-                $regex = $pattern -replace '\.', '\.' -replace '\*', '.*'
-                if ($path -match "^$regex$" -or $path -match "/$regex$" -or $path -match "^$regex/") {
-                    return $true
-                }
-            }
-        }
-        return $false
-    }
-
-    function Add-TreeNodes($parentNode, $treeData) {
-        foreach ($key in ($treeData.Keys | Sort-Object)) {
-            $item = $treeData[$key]
-            $node = New-Object System.Windows.Forms.TreeNode
-            $node.Text = "$key"
-            $node.Tag = $item.Path
-            if ($item.IsDir) {
-                $node.ImageIndex = 0
-                $node.SelectedImageIndex = 0
-                Add-TreeNodes $node $item.Children
-            } else {
-                $node.ImageIndex = 1
-                $node.SelectedImageIndex = 1
-            }
-            if (IsIgnored $item.Path -or $script:persistedExcludes -contains $item.Path) {
-                $node.Checked = $true
-            }
-            $parentNode.Nodes.Add($node) | Out-Null
-        }
-    }
-
-    $rootNode = New-Object System.Windows.Forms.TreeNode
-    $rootNode.Text = "仓库文件"
-    $rootNode.ImageIndex = 0
-    $rootNode.SelectedImageIndex = 0
-    Add-TreeNodes $rootNode $tree
-    $treeView.Nodes.Add($rootNode) | Out-Null
-    $rootNode.Expand()
-
-    $btnDlgOK = New-Object System.Windows.Forms.Button
-    $btnDlgOK.Text = "确  定"
-    $btnDlgOK.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10), [System.Drawing.FontStyle]::Bold)
-    $btnDlgOK.ForeColor = [System.Drawing.Color]::White
-    $btnDlgOK.BackColor = $primaryColor
-    $btnDlgOK.FlatStyle = "Flat"
-    $btnDlgOK.FlatAppearance.BorderSize = 0
-    $btnDlgOK.Location = P 350 465
-    $btnDlgOK.Size = S 115 32
-    $dlgForm.Controls.Add($btnDlgOK)
-
-    $btnDlgCancel = New-Object System.Windows.Forms.Button
-    $btnDlgCancel.Text = "取  消"
-    $btnDlgCancel.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10))
-    $btnDlgCancel.ForeColor = $textSecondary
-    $btnDlgCancel.BackColor = "Transparent"
-    $btnDlgCancel.FlatStyle = "Flat"
-    $btnDlgCancel.FlatAppearance.BorderSize = 0
-    $btnDlgCancel.Location = P 220 465
-    $btnDlgCancel.Size = S 115 32
-    $dlgForm.Controls.Add($btnDlgCancel)
-
-    $btnSelectAll = New-Object System.Windows.Forms.Button
-    $btnSelectAll.Text = "全选"
-    $btnSelectAll.Font = New-Object System.Drawing.Font("Segoe UI", $(F 9))
-    $btnSelectAll.ForeColor = $primaryColor
-    $btnSelectAll.BackColor = "Transparent"
-    $btnSelectAll.FlatStyle = "Flat"
-    $btnSelectAll.FlatAppearance.BorderSize = 0
-    $btnSelectAll.Location = P 15 465
-    $btnSelectAll.Size = S 60 32
-    $btnSelectAll.Add_Click({
-        foreach ($n in $treeView.Nodes[0].Nodes) { $n.Checked = $true }
-    })
-    $dlgForm.Controls.Add($btnSelectAll)
-
-    $btnSelectNone = New-Object System.Windows.Forms.Button
-    $btnSelectNone.Text = "全不选"
-    $btnSelectNone.Font = New-Object System.Drawing.Font("Segoe UI", $(F 9))
-    $btnSelectNone.ForeColor = $primaryColor
-    $btnSelectNone.BackColor = "Transparent"
-    $btnSelectNone.FlatStyle = "Flat"
-    $btnSelectNone.FlatAppearance.BorderSize = 0
-    $btnSelectNone.Location = P 85 465
-    $btnSelectNone.Size = S 70 32
-    $btnSelectNone.Add_Click({
-        foreach ($n in $treeView.Nodes[0].Nodes) { $n.Checked = $false }
-    })
-    $dlgForm.Controls.Add($btnSelectNone)
-
-    $btnDlgOK.Add_Click({
-        $script:ignoredFiles = @()
-        function Get-CheckedPaths($node) {
-            foreach ($child in $node.Nodes) {
-                if ($child.Checked) { $script:ignoredFiles += $child.Tag }
-                Get-CheckedPaths $child
-            }
-        }
-        Get-CheckedPaths $treeView.Nodes[0]
-        # 将排除列表写入 .gitignore
-        $script:persistedExcludes = $script:ignoredFiles
-        Write-ExcludesToGitignore $script:ignoredFiles
-        $dlgForm.DialogResult = "OK"
-        $dlgForm.Close()
-    })
-    $btnDlgCancel.Add_Click({ $dlgForm.DialogResult = "Cancel"; $dlgForm.Close() })
-
-    $dlgForm.ShowDialog()
-    return $ignoredFiles
-}
 
 # ===== 顶部标题区域 =====
 $topPanel = New-Object System.Windows.Forms.Panel
@@ -503,70 +237,6 @@ $txtBranch.BringToFront()
 
 $form.Controls.Add($card2)
 
-# ===== 卡片容器 - 排除文件 =====
-$cardIgnore = New-Object System.Windows.Forms.Panel
-$cardIgnore.Location = P 24 345
-$cardIgnore.Size = S 592 80
-$cardIgnore.BackColor = $cardBg
-
-$lblIgnore = New-Object System.Windows.Forms.Label
-$lblIgnore.Text = "排除文件"
-$lblIgnore.Font = New-Object System.Drawing.Font("Segoe UI", $(F 11), [System.Drawing.FontStyle]::Bold)
-$lblIgnore.ForeColor = $textPrimary
-$lblIgnore.Location = P 20 8
-$lblIgnore.Size = S 300 20
-$cardIgnore.Controls.Add($lblIgnore)
-
-$lblIgnoreDesc = New-Object System.Windows.Forms.Label
-$lblIgnoreDesc.Text = "默认全量推送（新文件+修改），可手动勾掉不需要推送的文件"
-$lblIgnoreDesc.Font = New-Object System.Drawing.Font("Segoe UI", $(F 8))
-$lblIgnoreDesc.ForeColor = $textSecondary
-$lblIgnoreDesc.Location = P 20 28
-$lblIgnoreDesc.Size = S 480 16
-$cardIgnore.Controls.Add($lblIgnoreDesc)
-
-$cbIgnoreUntracked = New-Object System.Windows.Forms.CheckBox
-$cbIgnoreUntracked.Text = "选择要排除的文件"
-$cbIgnoreUntracked.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10))
-$cbIgnoreUntracked.ForeColor = $textPrimary
-$cbIgnoreUntracked.Location = P 20 46
-$cbIgnoreUntracked.AutoSize = $true
-$cbIgnoreUntracked.Checked = $true
-$cbIgnoreUntracked.UseVisualStyleBackColor = $true
-$cardIgnore.Controls.Add($cbIgnoreUntracked)
-
-$lblIgnoreCount = New-Object System.Windows.Forms.Label
-$lblIgnoreCount.Text = ""
-$lblIgnoreCount.Font = New-Object System.Drawing.Font("Consolas", $(F 9))
-$lblIgnoreCount.ForeColor = $textSecondary
-$lblIgnoreCount.Location = P 185 48
-$lblIgnoreCount.Size = S 220 20
-$cardIgnore.Controls.Add($lblIgnoreCount)
-
-$btnIgnoreSelect = New-Object System.Windows.Forms.Button
-$btnIgnoreSelect.Text = "选择排除"
-$btnIgnoreSelect.Font = New-Object System.Drawing.Font("Segoe UI", $(F 9))
-$btnIgnoreSelect.ForeColor = [System.Drawing.Color]::White
-$btnIgnoreSelect.BackColor = $primaryColor
-$btnIgnoreSelect.FlatStyle = "Flat"
-$btnIgnoreSelect.FlatAppearance.BorderSize = 0
-$btnIgnoreSelect.Location = P 400 44
-$btnIgnoreSelect.Size = S 90 28
-$btnIgnoreSelect.Cursor = "Hand"
-$btnIgnoreSelect.Visible = $true
-$lblIgnoreCount.Text = "点击选择要排除的文件"
-$btnIgnoreSelect.Add_Click({
-    $ignored = Show-UntrackedFileDialog
-    if ($ignored.Count -gt 0) {
-        $lblIgnoreCount.Text = "已排除 $($ignored.Count) 个文件/目录"
-    } else {
-        $lblIgnoreCount.Text = ""
-    }
-})
-$cardIgnore.Controls.Add($btnIgnoreSelect)
-
-$form.Controls.Add($cardIgnore)
-
 # ===== 卡片容器 - 提交信息 =====
 $card3 = New-Object System.Windows.Forms.Panel
 $card3.Location = P 24 415
@@ -597,7 +267,7 @@ $form.Controls.Add($card3)
 
 # ===== 卡片容器 - 执行日志 =====
 $card4 = New-Object System.Windows.Forms.Panel
-$card4.Location = P 24 570
+$card4.Location = P 24 490
 $card4.Size = S 592 140
 $card4.BackColor = $cardBg
 $form.Controls.Add($card4)
@@ -624,7 +294,7 @@ $card4.Controls.Add($txtOutput)
 
 # ===== 底部按钮 =====
 $btnPanel = New-Object System.Windows.Forms.Panel
-$btnPanel.Location = P 0 710
+$btnPanel.Location = P 0 630
 $btnPanel.Size = S 640 60
 $btnPanel.BackColor = $cardBg
 $form.Controls.Add($btnPanel)
@@ -665,23 +335,7 @@ $btnRun.Add_MouseLeave({ if ($btnRun.Enabled) { $btnRun.BackColor = $primaryColo
 $btnCancel.Add_MouseEnter({ $btnCancel.BackColor = $inputBg })
 $btnCancel.Add_MouseLeave({ $btnCancel.BackColor = [System.Drawing.Color]::Transparent })
 
-# 排除文件复选框切换
-$cbIgnoreUntracked.Add_CheckedChanged({
-    if ($cbIgnoreUntracked.Checked) {
-        $btnIgnoreSelect.Visible = $true
-        $lblIgnoreCount.Text = "点击选择要排除的文件"
-        # 勾选时：将已有排除列表写入 .gitignore
-        if ($script:ignoredFiles.Count -gt 0) {
-            Write-ExcludesToGitignore $script:ignoredFiles
-        }
-    } else {
-        $btnIgnoreSelect.Visible = $false
-        $lblIgnoreCount.Text = ""
-        $script:ignoredFiles = @()
-        # 取消时：清除 .gitignore 中的工具标记区域
-        Write-ExcludesToGitignore @()
-    }
-})
+
 
 # ===== Git 操作函数 =====
 function Switch-Branch($target) {
@@ -693,21 +347,11 @@ function Switch-Branch($target) {
     return $null
 }
 
-function Do-Push($branch, $commitMsg, $ignoreUntracked) {
+function Do-Push($branch, $commitMsg) {
     $output = ""
     $err = Switch-Branch $branch
     if ($err) { return "切换分支失败:`n$err" }
-
-    if ($ignoreUntracked -and $script:ignoredFiles.Count -gt 0) {
-        git add -A
-        foreach ($f in $script:ignoredFiles) {
-            git reset HEAD -- $f 2>$null | Out-Null
-        }
-        $output += "[排除文件] 以下文件未添加到提交：`n"
-        foreach ($f in $script:ignoredFiles) { $output += "  - $f`n" }
-    } else {
-        git add -A
-    }
+    git add -A
 
     $commitMsgFile = Join-Path $env:TEMP "git-commit-msg-$([Guid]::NewGuid().ToString()).txt"
     [System.IO.File]::WriteAllText($commitMsgFile, $commitMsg, [System.Text.Encoding]::UTF8)
@@ -778,7 +422,7 @@ $btnRun.Add_Click({
 
     # 同步执行 git 操作（替代手动输入 git 命令，直接调用主脚本函数）
     if ($isPush) {
-        $result = Do-Push $targetBranch $commitMsg $cbIgnoreUntracked.Checked
+        $result = Do-Push $targetBranch $commitMsg
     } else {
         $result = Do-Pull $targetBranch
     }

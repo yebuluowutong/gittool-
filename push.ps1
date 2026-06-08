@@ -804,17 +804,33 @@ if ($IsPush) {
     # 定时器轮询检查异步执行是否完成
     $pollTimer = New-Object System.Windows.Forms.Timer
     $pollTimer.Interval = 300
+
+    # 将异步对象提升到脚本级变量，确保闭包引用不会被 GC 回收
+    $script:_asyncJob = $psJob
+    $script:_asyncRunspace = $runspace
+    $script:_asyncResult = $asyncResult
+    $script:_asyncTimer = $pollTimer
+    $script:_asyncStart = [DateTime]::Now
+
     $pollTimer.Add_Tick({
-        if ($asyncResult.IsCompleted) {
-            $pollTimer.Stop()
-            $pollTimer.Dispose()
+        $r = $script:_asyncResult
+        $t = $script:_asyncTimer
+        if (-not $r) { return }
+
+        if ($r.IsCompleted) {
+            $t.Stop()
+            $t.Dispose()
             try {
-                $result = $psJob.EndInvoke($asyncResult)
+                $result = $script:_asyncJob.EndInvoke($r)
             } catch {
                 $result = "[错误] 执行异常: $_"
             } finally {
-                $psJob.Dispose()
-                $runspace.Dispose()
+                $script:_asyncJob.Dispose()
+                $script:_asyncRunspace.Dispose()
+                $script:_asyncJob = $null
+                $script:_asyncRunspace = $null
+                $script:_asyncResult = $null
+                $script:_asyncTimer = $null
             }
 
             $txtOutput.Text = $result
@@ -827,12 +843,30 @@ if ($IsPush) {
             } else {
                 [System.Windows.Forms.MessageBox]::Show("操作成功！", "成功", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
+        } elseif (([DateTime]::Now - $script:_asyncStart).TotalSeconds -gt 120) {
+            # 超时兜底：120 秒未完成则强制结束
+            $t.Stop()
+            $t.Dispose()
+            try {
+                if (-not $script:_asyncResult.IsCompleted) {
+                    $script:_asyncJob.Stop()
+                }
+                $script:_asyncJob.Dispose()
+                $script:_asyncRunspace.Dispose()
+            } catch { }
+            $script:_asyncJob = $null
+            $script:_asyncRunspace = $null
+            $script:_asyncResult = $null
+            $script:_asyncTimer = $null
+
+            $txtOutput.Text = "[错误] 操作超时（120 秒），请检查网络连接或 Git 仓库状态"
+            $btnRun.Enabled = $true
+            $btnRun.BackColor = $primaryColor
+            $btnRun.Cursor = "Hand"
+            [System.Windows.Forms.MessageBox]::Show("操作超时，请检查网络连接或 Git 仓库状态", "超时", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     })
     $pollTimer.Start()
-
-    # 保存 timer 引用到 Form，防止被 GC 回收导致 Tick 不再触发
-    $form.Tag = $pollTimer
 })
 
 $btnCancel.Add_Click({ $form.Dispose(); [System.Environment]::Exit(0) })

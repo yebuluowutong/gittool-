@@ -115,8 +115,12 @@ function Get-AllRepoFiles {
         $ignoredPatterns = Get-Content $gitignorePath | Where-Object { $_ -and -not $_.StartsWith("#") } | ForEach-Object { $_.Trim() }
     }
 
+    # 跳过非项目目录，避免递归扫描大量无关文件导致 UI 卡死
+    $skipDirs = @('.atomcode', 'node_modules', '.git', '.svn', 'bin', 'obj', 'packages')
+    $skipPattern = ($skipDirs | ForEach-Object { [regex]::Escape($_) }) -join '|'
+
     $allItems = Get-ChildItem -Path $repoPath -Recurse -Force |
-        Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' } |
+        Where-Object { $_.FullName -notmatch "[\\/]($skipPattern)([\\/]|$)" } |
         Sort-Object @{Expression={$_.PSIsContainer}; Descending=$false}, @{Expression={$_.FullName}; Ascending=$true}
 
     # 先收集所有目录路径

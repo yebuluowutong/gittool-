@@ -488,7 +488,7 @@ $cbIgnoreUntracked.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10))
 $cbIgnoreUntracked.ForeColor = $textPrimary
 $cbIgnoreUntracked.Location = P 20 46
 $cbIgnoreUntracked.AutoSize = $true
-$cbIgnoreUntracked.Checked = $false
+$cbIgnoreUntracked.Checked = $true
 $cbIgnoreUntracked.UseVisualStyleBackColor = $true
 $cardIgnore.Controls.Add($cbIgnoreUntracked)
 
@@ -510,11 +510,12 @@ $btnIgnoreSelect.FlatAppearance.BorderSize = 0
 $btnIgnoreSelect.Location = P 400 28
 $btnIgnoreSelect.Size = S 90 28
 $btnIgnoreSelect.Cursor = "Hand"
-$btnIgnoreSelect.Visible = $false
+$btnIgnoreSelect.Visible = $true
+$lblIgnoreCount.Text = "点击选择要排除的文件"
 $btnIgnoreSelect.Add_Click({
     $ignored = Show-UntrackedFileDialog
     if ($ignored.Count -gt 0) {
-        $lblIgnoreCount.Text = "已忽略 $($ignored.Count) 个文件/目录"
+        $lblIgnoreCount.Text = "已排除 $($ignored.Count) 个文件/目录"
     } else {
         $lblIgnoreCount.Text = ""
     }
@@ -621,11 +622,11 @@ $btnRun.Add_MouseLeave({ if ($btnRun.Enabled) { $btnRun.BackColor = $primaryColo
 $btnCancel.Add_MouseEnter({ $btnCancel.BackColor = $inputBg })
 $btnCancel.Add_MouseLeave({ $btnCancel.BackColor = [System.Drawing.Color]::Transparent })
 
-# 忽略复选框切换
+# 排除文件复选框切换
 $cbIgnoreUntracked.Add_CheckedChanged({
     if ($cbIgnoreUntracked.Checked) {
         $btnIgnoreSelect.Visible = $true
-        $lblIgnoreCount.Text = "点击选择要忽略的文件"
+        $lblIgnoreCount.Text = "点击选择要排除的文件"
     } else {
         $btnIgnoreSelect.Visible = $false
         $lblIgnoreCount.Text = ""

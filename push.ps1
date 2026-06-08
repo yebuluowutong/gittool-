@@ -161,6 +161,29 @@ if ($script:persistedExcludes.Count -gt 0) {
     $script:ignoredFiles = $script:persistedExcludes
 }
 
+# 写入排除列表到 .gitignore（标记区域）
+function Write-ExcludesToGitignore($excludes) {
+    $gitignorePath = Join-Path $repoPath ".gitignore"
+    $markerStart = "# === Git Push Tool 排除列表 ==="
+    $markerEnd   = "# === Git Push Tool 结束 ==="
+    $newSection = @($markerStart) + $excludes + @($markerEnd)
+    if (Test-Path $gitignorePath) {
+        $lines = Get-Content $gitignorePath
+        $startIdx = [array]::IndexOf($lines, $markerStart)
+        $endIdx   = [array]::IndexOf($lines, $markerEnd)
+        if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
+            $before = $lines[0..($startIdx-1)]
+            $after  = $lines[($endIdx+1)..($lines.Length-1)]
+            $newLines = $before + $newSection + $after
+        } else {
+            $newLines = $lines + @("") + $newSection
+        }
+    } else {
+        $newLines = $newSection
+    }
+    [System.IO.File]::WriteAllText($gitignorePath, ($newLines -join "`n") + "`n", [System.Text.Encoding]::UTF8)
+}
+
 function Show-UntrackedFileDialog {
     $data = Get-AllRepoFiles
     $tree = $data.Tree
@@ -336,27 +359,7 @@ function Show-UntrackedFileDialog {
         Get-CheckedPaths $treeView.Nodes[0]
         # 将排除列表写入 .gitignore
         $script:persistedExcludes = $script:ignoredFiles
-        $gitignorePath = Join-Path $repoPath ".gitignore"
-        $markerStart = "# === Git Push Tool 排除列表 ==="
-        $markerEnd   = "# === Git Push Tool 结束 ==="
-        $newSection = @($markerStart) + $script:ignoredFiles + @($markerEnd)
-        if (Test-Path $gitignorePath) {
-            $lines = Get-Content $gitignorePath
-            $startIdx = [array]::IndexOf($lines, $markerStart)
-            $endIdx   = [array]::IndexOf($lines, $markerEnd)
-            if ($startIdx -ge 0 -and $endIdx -gt $startIdx) {
-                # 替换已有工具区域
-                $before = $lines[0..($startIdx-1)]
-                $after  = $lines[($endIdx+1)..($lines.Length-1)]
-                $newLines = $before + $newSection + $after
-            } else {
-                # 追加到文件末尾
-                $newLines = $lines + @("") + $newSection
-            }
-        } else {
-            $newLines = $newSection
-        }
-        [System.IO.File]::WriteAllText($gitignorePath, ($newLines -join "`n") + "`n", [System.Text.Encoding]::UTF8)
+        Write-ExcludesToGitignore $script:ignoredFiles
         $dlgForm.DialogResult = "OK"
         $dlgForm.Close()
     })
@@ -663,10 +666,16 @@ $cbIgnoreUntracked.Add_CheckedChanged({
     if ($cbIgnoreUntracked.Checked) {
         $btnIgnoreSelect.Visible = $true
         $lblIgnoreCount.Text = "点击选择要排除的文件"
+        # 勾选时：将已有排除列表写入 .gitignore
+        if ($script:ignoredFiles.Count -gt 0) {
+            Write-ExcludesToGitignore $script:ignoredFiles
+        }
     } else {
         $btnIgnoreSelect.Visible = $false
         $lblIgnoreCount.Text = ""
         $script:ignoredFiles = @()
+        # 取消时：清除 .gitignore 中的工具标记区域
+        Write-ExcludesToGitignore @()
     }
 })
 

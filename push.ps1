@@ -159,7 +159,7 @@ function Show-UntrackedFileDialog {
     }
 
     $dlgForm = New-Object System.Windows.Forms.Form
-    $dlgForm.Text = "选择要忽略的文件"
+    $dlgForm.Text = "选择要排除的文件"
     $dlgForm.Size = S 500 550
     $dlgForm.StartPosition = "CenterScreen"
     $dlgForm.FormBorderStyle = "FixedDialog"
@@ -168,7 +168,7 @@ function Show-UntrackedFileDialog {
     $dlgForm.BackColor = $cardBg
 
     $lblDlg = New-Object System.Windows.Forms.Label
-    $lblDlg.Text = "勾选要忽略的文件（不添加到提交）"
+    $lblDlg.Text = "勾选需要排除的文件（不会提交推送）"
     $lblDlg.Font = New-Object System.Drawing.Font("Segoe UI", $(F 11), [System.Drawing.FontStyle]::Bold)
     $lblDlg.ForeColor = $textPrimary
     $lblDlg.Location = P 15 15
@@ -460,25 +460,33 @@ $txtBranch.BringToFront()
 
 $form.Controls.Add($card2)
 
-# ===== 卡片容器 - 忽略文件 =====
+# ===== 卡片容器 - 排除文件 =====
 $cardIgnore = New-Object System.Windows.Forms.Panel
 $cardIgnore.Location = P 24 345
-$cardIgnore.Size = S 592 60
+$cardIgnore.Size = S 592 80
 $cardIgnore.BackColor = $cardBg
 
 $lblIgnore = New-Object System.Windows.Forms.Label
-$lblIgnore.Text = "忽略文件"
+$lblIgnore.Text = "排除文件"
 $lblIgnore.Font = New-Object System.Drawing.Font("Segoe UI", $(F 11), [System.Drawing.FontStyle]::Bold)
 $lblIgnore.ForeColor = $textPrimary
-$lblIgnore.Location = P 20 10
-$lblIgnore.Size = S 200 20
+$lblIgnore.Location = P 20 8
+$lblIgnore.Size = S 300 20
 $cardIgnore.Controls.Add($lblIgnore)
 
+$lblIgnoreDesc = New-Object System.Windows.Forms.Label
+$lblIgnoreDesc.Text = "默认全量推送（新文件+修改），可手动勾掉不需要推送的文件"
+$lblIgnoreDesc.Font = New-Object System.Drawing.Font("Segoe UI", $(F 8))
+$lblIgnoreDesc.ForeColor = $textSecondary
+$lblIgnoreDesc.Location = P 20 28
+$lblIgnoreDesc.Size = S 480 16
+$cardIgnore.Controls.Add($lblIgnoreDesc)
+
 $cbIgnoreUntracked = New-Object System.Windows.Forms.CheckBox
-$cbIgnoreUntracked.Text = "忽略文件/目录"
+$cbIgnoreUntracked.Text = "选择要排除的文件"
 $cbIgnoreUntracked.Font = New-Object System.Drawing.Font("Segoe UI", $(F 10))
 $cbIgnoreUntracked.ForeColor = $textPrimary
-$cbIgnoreUntracked.Location = P 20 32
+$cbIgnoreUntracked.Location = P 20 46
 $cbIgnoreUntracked.AutoSize = $true
 $cbIgnoreUntracked.Checked = $false
 $cbIgnoreUntracked.UseVisualStyleBackColor = $true
@@ -488,12 +496,12 @@ $lblIgnoreCount = New-Object System.Windows.Forms.Label
 $lblIgnoreCount.Text = ""
 $lblIgnoreCount.Font = New-Object System.Drawing.Font("Consolas", $(F 9))
 $lblIgnoreCount.ForeColor = $textSecondary
-$lblIgnoreCount.Location = P 165 34
+$lblIgnoreCount.Location = P 185 48
 $lblIgnoreCount.Size = S 220 20
 $cardIgnore.Controls.Add($lblIgnoreCount)
 
 $btnIgnoreSelect = New-Object System.Windows.Forms.Button
-$btnIgnoreSelect.Text = "选择文件"
+$btnIgnoreSelect.Text = "选择排除"
 $btnIgnoreSelect.Font = New-Object System.Drawing.Font("Segoe UI", $(F 9))
 $btnIgnoreSelect.ForeColor = [System.Drawing.Color]::White
 $btnIgnoreSelect.BackColor = $primaryColor
@@ -641,14 +649,14 @@ function Do-Push($branch, $commitMsg, $ignoreUntracked) {
     if ($err) { return "切换分支失败:`n$err" }
 
     if ($ignoreUntracked -and $script:ignoredFiles.Count -gt 0) {
-        git add -u
+        git add -A
         foreach ($f in $script:ignoredFiles) {
             git reset HEAD -- $f 2>$null | Out-Null
         }
-        $output += "[忽略文件] 以下文件未添加到提交：`n"
+        $output += "[排除文件] 以下文件未添加到提交：`n"
         foreach ($f in $script:ignoredFiles) { $output += "  - $f`n" }
     } else {
-        git add -u
+        git add -A
     }
 
     # 使用 UTF-8 编码写入提交信息文件，避免中文乱码

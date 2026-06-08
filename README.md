@@ -41,3 +41,7 @@ Invoke-PS2EXE -inputFile "push.ps1" -outputFile "git-tool.exe" -noConsole -title
 
 - Windows 10 或更高版本
 - Git for Windows（已安装并配置 SSH/HTTPS）
+
+## 许可证
+
+本项目基于 Apache License 2.0 开源 — 详见 [LICENSE](LICENSE) 文件。

@@ -830,6 +830,9 @@ if ($IsPush) {
         }
     })
     $pollTimer.Start()
+
+    # 保存 timer 引用到 Form，防止被 GC 回收导致 Tick 不再触发
+    $form.Tag = $pollTimer
 })
 
 $btnCancel.Add_Click({ $form.Dispose(); [System.Environment]::Exit(0) })

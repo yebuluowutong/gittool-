@@ -679,7 +679,50 @@ $cbIgnoreUntracked.Add_CheckedChanged({
     }
 })
 
-# 切换分支
+
+
+$btnRun.Add_Click({
+    $isPush = $rbPush.Checked
+    $targetBranch = ""
+
+    if ($rbBranchCur.Checked) { $targetBranch = $currentBranch }
+    elseif ($rbBranchMain.Checked) { $targetBranch = "main" }
+    elseif ($rbBranchMaster.Checked) { $targetBranch = "master" }
+    elseif ($rbBranchOther.Checked) {
+        $targetBranch = $txtBranch.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+            [System.Windows.Forms.MessageBox]::Show("请输入分支名", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+    }
+
+    if ($isPush) {
+        $commitMsg = $txtCommit.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($commitMsg)) {
+            [System.Windows.Forms.MessageBox]::Show("请输入提交信息", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+    }
+
+    $btnRun.Enabled = $false
+    $btnRun.BackColor = [System.Drawing.Color]::FromArgb(160, 160, 160)
+    $btnRun.Cursor = "WaitCursor"
+    $txtOutput.Text = "执行中，请稍候...`n"
+    # 立即刷新界面文字，否则按钮禁用和提示文字被后续阻塞操作卡住无法显示
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # === 异步执行 git 操作（runspace），避免阻塞 UI ===
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.Open()
+    $psJob = [System.Management.Automation.PowerShell]::Create()
+    $psJob.Runspace = $runspace
+
+    # 使用单引号 here-string，内部 $ 为字面量，由 runspace 解析
+    $runspaceScript = @'
+param($Branch, $CommitMsg, $IsPush, $IgnoreUntracked, $IgnoredFiles, $RepoPath)
+
+Set-Location $RepoPath
+
 function Switch-Branch($target) {
     $current = (git rev-parse --abbrev-ref HEAD).Trim()
     if ($target -ne $current) {
@@ -689,23 +732,22 @@ function Switch-Branch($target) {
     return $null
 }
 
-function Do-Push($branch, $commitMsg, $ignoreUntracked) {
+function Do-Push($branch, $commitMsg, $ignoreUntracked, $ignoredFiles) {
     $output = ""
     $err = Switch-Branch $branch
     if ($err) { return "切换分支失败:`n$err" }
 
-    if ($ignoreUntracked -and $script:ignoredFiles.Count -gt 0) {
+    if ($ignoreUntracked -and $ignoredFiles.Count -gt 0) {
         git add -A
-        foreach ($f in $script:ignoredFiles) {
+        foreach ($f in $ignoredFiles) {
             git reset HEAD -- $f 2>$null | Out-Null
         }
         $output += "[排除文件] 以下文件未添加到提交：`n"
-        foreach ($f in $script:ignoredFiles) { $output += "  - $f`n" }
+        foreach ($f in $ignoredFiles) { $output += "  - $f`n" }
     } else {
         git add -A
     }
 
-    # 使用 UTF-8 编码写入提交信息文件，避免中文乱码
     $commitMsgFile = Join-Path $env:TEMP "git-commit-msg-$([Guid]::NewGuid().ToString()).txt"
     [System.IO.File]::WriteAllText($commitMsgFile, $commitMsg, [System.Text.Encoding]::UTF8)
     $commitResult = (git commit -F $commitMsgFile 2>&1) | Out-String
@@ -743,50 +785,51 @@ function Do-Pull($branch) {
     return $output
 }
 
-$btnRun.Add_Click({
-    $isPush = $rbPush.Checked
-    $targetBranch = ""
+if ($IsPush) {
+    return Do-Push $Branch $CommitMsg $IgnoreUntracked $IgnoredFiles
+} else {
+    return Do-Pull $Branch
+}
+'@
+    [void]$psJob.AddScript($runspaceScript)
+    [void]$psJob.AddParameter("Branch", $targetBranch)
+    [void]$psJob.AddParameter("CommitMsg", $commitMsg)
+    [void]$psJob.AddParameter("IsPush", $isPush)
+    [void]$psJob.AddParameter("IgnoreUntracked", $cbIgnoreUntracked.Checked)
+    [void]$psJob.AddParameter("IgnoredFiles", $script:ignoredFiles)
+    [void]$psJob.AddParameter("RepoPath", (Get-Location).Path)
 
-    if ($rbBranchCur.Checked) { $targetBranch = $currentBranch }
-    elseif ($rbBranchMain.Checked) { $targetBranch = "main" }
-    elseif ($rbBranchMaster.Checked) { $targetBranch = "master" }
-    elseif ($rbBranchOther.Checked) {
-        $targetBranch = $txtBranch.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-            [System.Windows.Forms.MessageBox]::Show("请输入分支名", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
+    $asyncResult = $psJob.BeginInvoke()
+
+    # 定时器轮询检查异步执行是否完成
+    $pollTimer = New-Object System.Windows.Forms.Timer
+    $pollTimer.Interval = 300
+    $pollTimer.Add_Tick({
+        if ($asyncResult.IsCompleted) {
+            $pollTimer.Stop()
+            $pollTimer.Dispose()
+            try {
+                $result = $psJob.EndInvoke($asyncResult)
+            } catch {
+                $result = "[错误] 执行异常: $_"
+            } finally {
+                $psJob.Dispose()
+                $runspace.Dispose()
+            }
+
+            $txtOutput.Text = $result
+            $btnRun.Enabled = $true
+            $btnRun.BackColor = $primaryColor
+            $btnRun.Cursor = "Hand"
+
+            if ($result -match "\[错误\]") {
+                [System.Windows.Forms.MessageBox]::Show("操作失败，请查看日志详情", "失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("操作成功！", "成功", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
         }
-    }
-
-    if ($isPush) {
-        $commitMsg = $txtCommit.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($commitMsg)) {
-            [System.Windows.Forms.MessageBox]::Show("请输入提交信息", "提示", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
-        }
-    }
-
-    $btnRun.Enabled = $false
-    $btnRun.BackColor = [System.Drawing.Color]::FromArgb(160, 160, 160)
-    $btnRun.Cursor = "WaitCursor"
-    $txtOutput.Text = "执行中，请稍候...`n"
-
-    if ($isPush) {
-        $result = Do-Push $targetBranch $commitMsg $cbIgnoreUntracked.Checked
-    } else {
-        $result = Do-Pull $targetBranch
-    }
-
-    $txtOutput.Text = $result
-    $btnRun.Enabled = $true
-    $btnRun.BackColor = $primaryColor
-    $btnRun.Cursor = "Hand"
-
-    if ($result -match "\[错误\]") {
-        [System.Windows.Forms.MessageBox]::Show("操作失败，请查看日志详情", "失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    } else {
-        [System.Windows.Forms.MessageBox]::Show("操作成功！", "成功", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    }
+    })
+    $pollTimer.Start()
 })
 
 $btnCancel.Add_Click({ $form.Dispose(); [System.Environment]::Exit(0) })

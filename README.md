@@ -21,7 +21,7 @@ Windows 系统下的 Git 推送/拉取图形化工具，采用 Google Material D
 
 ### 运行
 
-双击 `git-tool.vbs` 静默启动，或双击 `git-tool.exe` 启动（显示控制台窗口）。
+双击 `git-tool.vbs` 静默启动，或右键 `push.ps1` → 使用 PowerShell 运行。
 
 ### 使用流程
 
@@ -33,20 +33,11 @@ Windows 系统下的 Git 推送/拉取图形化工具，采用 Google Material D
 
 > 排除列表会自动保存到 `.gitignore` 的标记区域（`# === Git Push Tool 排除列表 ===`），下次打开无需重新选择。
 
-### 编译
-
-如需自行编译，安装 PS2EXE 模块后执行：
-
-```powershell
-Install-Module -Name PS2EXE -Force
-Invoke-PS2EXE -inputFile "push.ps1" -outputFile "git-tool.exe" -noConsole -title "Git Push / Pull"
-```
 
 ## 技术实现
 
 - **框架**: PowerShell + Windows Forms
 - **编码**: UTF-8 BOM
-- **打包**: PS2EXE-GUI v0.5.0.33
 - **适配**: 基于 1920x1080 基准分辨率自动缩放（0.8~1.2x）
 
 ## 排除机制说明
